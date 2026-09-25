@@ -1,0 +1,47 @@
+name: sync
+
+on:
+  schedule:
+    - cron: "15 5 * * 1,3,5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: run
+        env:
+          K: ${{ secrets.K }}
+        run: |
+          set -e
+          E="openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -pass env:K"
+          mkdir -p w data
+          $E -d -in app.bin -out w/a.py
+          if [ -f data/s.bin ]; then $E -d -in data/s.bin -out w/state.json || true; fi
+          WORK_DIR=w python w/a.py > w/out.txt 2>&1 || true
+          d=$(TZ=Africa/Casablanca date +%F)
+          for f in w/ausbildung-leads-*.csv; do [ -e "$f" ] && $E -salt -in "$f" -out "data/l-$d.bin"; done
+          $E -salt -in w/out.txt -out "data/g-$d.bin"
+          [ -f w/state.json ] && $E -salt -in w/state.json -out data/s.bin
+          cut=$(date -u -d '-14 days' +%F)
+          for f in data/l-*.bin data/g-*.bin; do
+            [ -e "$f" ] || continue
+            x=${f#data/?-}; x=${x%.bin}
+            if [[ "$x" < "$cut" ]]; then rm -f "$f"; fi
+          done
+          rm -rf w
+      - name: save
+        run: |
+          git config user.name "bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A data
+          git commit -q -m "update" || true
+          git push -q
